@@ -225,6 +225,27 @@
             cursor: not-allowed;
         }
 
+        .clear-btn {
+            width: 100%;
+            padding: 12px;
+            background: rgba(255, 59, 48, 0.1);
+            border: 1px solid rgba(255, 59, 48, 0.3);
+            border-radius: 8px;
+            color: #ff3b30;
+            font-size: 14px;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: all 0.2s ease;
+        }
+
+        .clear-btn:hover {
+            background: rgba(255, 59, 48, 0.2);
+        }
+
+        .clear-btn:active {
+            transform: scale(0.98);
+        }
+
         @media (max-width: 480px) {
             .container {
                 padding: 10px;
@@ -267,6 +288,10 @@
                 还没有音乐，点击上方按钮添加
             </div>
         </div>
+
+        <button class="clear-btn" id="clearBtn" onclick="player.clearAllTracks()" style="display: none;">
+            🗑️ 清空所有音乐
+        </button>
 
         <div class="player">
             <div class="current-track">

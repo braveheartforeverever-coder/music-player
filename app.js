@@ -3,6 +3,7 @@ class MusicPlayer {
         this.playlist = [];
         this.currentIndex = -1;
         this.isPlaying = false;
+        this.db = null;
 
         this.audioPlayer = document.getElementById('audioPlayer');
         this.fileInput = document.getElementById('fileInput');
@@ -20,7 +21,9 @@ class MusicPlayer {
         this.init();
     }
 
-    init() {
+    async init() {
+        await this.initDB();
+        
         this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         this.playPauseBtn.addEventListener('click', () => this.togglePlayPause());
         this.prevBtn.addEventListener('click', () => this.playPrevious());
@@ -40,26 +43,38 @@ class MusicPlayer {
             this.updatePlayPauseButton();
         });
 
-        this.loadPlaylistFromStorage();
+        await this.loadPlaylistFromDB();
     }
 
-    handleFileSelect(event) {
+    async initDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open('MusicPlayerDB', 1);
+            
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                this.db = request.result;
+                resolve();
+            };
+            
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains('tracks')) {
+                    db.createObjectStore('tracks', { keyPath: 'id', autoIncrement: true });
+                }
+            };
+        });
+    }
+
+    async handleFileSelect(event) {
         const files = Array.from(event.target.files);
         
-        files.forEach(file => {
+        for (const file of files) {
             if (file.type.startsWith('audio/')) {
-                const url = URL.createObjectURL(file);
-                this.playlist.push({
-                    name: file.name,
-                    url: url,
-                    file: file
-                });
+                await this.saveTrackToDB(file);
             }
-        });
+        }
 
-        this.renderPlaylist();
-        this.enableControls();
-        this.savePlaylistToStorage();
+        await this.loadPlaylistFromDB();
 
         if (this.currentIndex === -1 && this.playlist.length > 0) {
             this.loadTrack(0);
@@ -68,11 +83,96 @@ class MusicPlayer {
         event.target.value = '';
     }
 
-    renderPlaylist() {
-        if (this.playlist.length === 0) {
-            this.playlistElement.innerHTML = '<div class="empty-playlist">还没有音乐，点击上方按钮添加</div>';
+    async saveTrackToDB(file) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['tracks'], 'readwrite');
+            const store = transaction.objectStore('tracks');
+            
+            const trackData = {
+                name: file.name,
+                blob: file,
+                addedAt: Date.now()
+            };
+            
+            const request = store.add(trackData);
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async loadPlaylistFromDB() {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['tracks'], 'readonly');
+            const store = transaction.objectStore('tracks');
+            const request = store.getAll();
+            
+            request.onsuccess = () => {
+                const tracks = request.result;
+                this.playlist = tracks.map(track => ({
+                    id: track.id,
+                    name: track.name,
+                    url: URL.createObjectURL(track.blob),
+                    blob: track.blob
+                }));
+                
+                this.renderPlaylist();
+                if (this.playlist.length > 0) {
+                    this.enableControls();
+                }
+                resolve();
+            };
+            
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async clearAllTracks() {
+        if (!confirm('确定要清空所有音乐吗？此操作不可恢复。')) {
             return;
         }
+
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['tracks'], 'readwrite');
+            const store = transaction.objectStore('tracks');
+            const request = store.clear();
+            
+            request.onsuccess = async () => {
+                this.playlist.forEach(track => {
+                    if (track.url) {
+                        URL.revokeObjectURL(track.url);
+                    }
+                });
+                
+                this.playlist = [];
+                this.currentIndex = -1;
+                this.audioPlayer.src = '';
+                this.currentTrackName.textContent = '未播放';
+                this.isPlaying = false;
+                this.updatePlayPauseButton();
+                this.renderPlaylist();
+                
+                this.playPauseBtn.disabled = true;
+                this.prevBtn.disabled = true;
+                this.nextBtn.disabled = true;
+                this.forwardBtn.disabled = true;
+                
+                resolve();
+            };
+            
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    renderPlaylist() {
+        const clearBtn = document.getElementById('clearBtn');
+        
+        if (this.playlist.length === 0) {
+            this.playlistElement.innerHTML = '<div class="empty-playlist">还没有音乐，点击上方按钮添加</div>';
+            if (clearBtn) clearBtn.style.display = 'none';
+            return;
+        }
+
+        if (clearBtn) clearBtn.style.display = 'block';
 
         this.playlistElement.innerHTML = this.playlist.map((track, index) => `
             <div class="playlist-item ${index === this.currentIndex ? 'active' : ''}" 
@@ -202,24 +302,6 @@ class MusicPlayer {
         this.nextBtn.disabled = false;
         this.forwardBtn.disabled = false;
     }
-
-    savePlaylistToStorage() {
-        const playlistData = this.playlist.map(track => ({
-            name: track.name
-        }));
-        localStorage.setItem('musicPlayerPlaylist', JSON.stringify(playlistData));
-    }
-
-    loadPlaylistFromStorage() {
-        try {
-            const stored = localStorage.getItem('musicPlayerPlaylist');
-            if (stored) {
-                const playlistData = JSON.parse(stored);
-            }
-        } catch (error) {
-            console.error('加载播放列表失败:', error);
-        }
-    }
 }
 
 if ('serviceWorker' in navigator) {
@@ -230,4 +312,7 @@ if ('serviceWorker' in navigator) {
     });
 }
 
-const player = new MusicPlayer();
+let player;
+window.addEventListener('load', async () => {
+    player = new MusicPlayer();
+});

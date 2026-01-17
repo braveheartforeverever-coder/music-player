@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head><title>Create Icons</title></head>
+<body>
+<canvas id="canvas" width="512" height="512"></canvas>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+ctx.fillStyle = '#667eea';
+ctx.fillRect(0, 0, 512, 512);
+ctx.fillStyle = 'white';
+ctx.font = 'bold 200px Arial';
+ctx.textAlign = 'center';
+ctx.textBaseline = 'middle';
+ctx.fillText('🎵', 256, 256);
+const dataUrl512 = canvas.toDataURL();
+canvas.width = 192;
+canvas.height = 192;
+ctx.fillStyle = '#667eea';
+ctx.fillRect(0, 0, 192, 192);
+ctx.fillStyle = 'white';
+ctx.font = 'bold 80px Arial';
+ctx.textAlign = 'center';
+ctx.textBaseline = 'middle';
+ctx.fillText('🎵', 96, 96);
+const dataUrl192 = canvas.toDataURL();
+console.log('Icons created. Download them manually from browser.');
+</script>
+</body>
+</html>

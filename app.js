@@ -278,6 +278,7 @@ class MusicPlayer {
         this.currentIndex = index;
         const track = this.playlist[index];
         this.audioPlayer.src = track.url;
+        this.audioPlayer.loop = (this.playMode === 'repeat-one');
 
         const displayName = this.cleanTrackName(track.name);
         this.npTitle.textContent = displayName;
@@ -369,6 +370,7 @@ class MusicPlayer {
     handleTrackEnd() {
         switch (this.playMode) {
             case 'repeat-one':
+                // Native loop attribute handles this; fallback in case `ended` still fires.
                 this.audioPlayer.currentTime = 0;
                 this.play();
                 break;
@@ -403,6 +405,7 @@ class MusicPlayer {
             this.shuffleHistory = [this.currentIndex];
             this.showToast('随机播放');
         }
+        this.audioPlayer.loop = (this.playMode === 'repeat-one');
     }
 
     toggleRepeat() {
@@ -428,6 +431,7 @@ class MusicPlayer {
                 this.showToast('顺序播放');
                 break;
         }
+        this.audioPlayer.loop = (this.playMode === 'repeat-one');
         this.updateRepeatIcon();
     }
 

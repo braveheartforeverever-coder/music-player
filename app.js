@@ -120,10 +120,16 @@ class MusicPlayer {
 
             request.onsuccess = () => {
                 const tracks = request.result;
+                const existingUrls = new Map(this.playlist.map(t => [t.id, t.url]));
+                const nextIds = new Set(tracks.map(t => t.id));
+                this.playlist.forEach(t => {
+                    if (!nextIds.has(t.id)) URL.revokeObjectURL(t.url);
+                });
+
                 this.playlist = tracks.map(t => ({
                     id: t.id,
                     name: t.name,
-                    url: URL.createObjectURL(t.blob),
+                    url: existingUrls.get(t.id) || URL.createObjectURL(t.blob),
                     blob: t.blob
                 }));
                 this.renderPlaylist();
@@ -222,24 +228,52 @@ class MusicPlayer {
 
             const displayName = this.cleanTrackName(track.name);
 
-            item.innerHTML = `
-                <span class="track-index">${index + 1}</span>
-                <div class="track-artwork">
-                    <span class="track-artwork-icon">♪</span>
-                    <div class="playing-indicator">
-                        <div class="playing-bar"></div>
-                        <div class="playing-bar"></div>
-                        <div class="playing-bar"></div>
-                    </div>
-                </div>
-                <div class="track-info">
-                    <div class="track-name">${displayName}</div>
-                    <div class="track-meta">音乐</div>
-                </div>
-                <button class="track-delete" onclick="player.deleteTrack(${track.id}, event)" title="删除">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            `;
+            const trackIndex = document.createElement('span');
+            trackIndex.className = 'track-index';
+            trackIndex.textContent = index + 1;
+
+            const artwork = document.createElement('div');
+            artwork.className = 'track-artwork';
+
+            const artworkIcon = document.createElement('span');
+            artworkIcon.className = 'track-artwork-icon';
+            artworkIcon.textContent = '♪';
+
+            const playingIndicator = document.createElement('div');
+            playingIndicator.className = 'playing-indicator';
+            for (let i = 0; i < 3; i++) {
+                const bar = document.createElement('div');
+                bar.className = 'playing-bar';
+                playingIndicator.appendChild(bar);
+            }
+
+            artwork.appendChild(artworkIcon);
+            artwork.appendChild(playingIndicator);
+
+            const trackInfo = document.createElement('div');
+            trackInfo.className = 'track-info';
+
+            const trackName = document.createElement('div');
+            trackName.className = 'track-name';
+            trackName.textContent = displayName;
+
+            const trackMeta = document.createElement('div');
+            trackMeta.className = 'track-meta';
+            trackMeta.textContent = '音乐';
+
+            trackInfo.appendChild(trackName);
+            trackInfo.appendChild(trackMeta);
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'track-delete';
+            deleteBtn.title = '删除';
+            deleteBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+            deleteBtn.addEventListener('click', (event) => this.deleteTrack(track.id, event));
+
+            item.appendChild(trackIndex);
+            item.appendChild(artwork);
+            item.appendChild(trackInfo);
+            item.appendChild(deleteBtn);
 
             fragment.appendChild(item);
         });

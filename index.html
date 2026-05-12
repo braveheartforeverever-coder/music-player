@@ -120,6 +120,83 @@
             background: rgba(255, 59, 48, 0.08);
         }
 
+        /* Playlist tabs */
+        .playlist-tabs {
+            display: flex;
+            gap: 8px;
+            padding: 8px 24px 12px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+            flex-shrink: 0;
+        }
+
+        .playlist-tabs::-webkit-scrollbar { display: none; }
+
+        .playlist-tabs:empty { display: none; }
+
+        .playlist-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+            height: 32px;
+            padding: 0 14px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--surface-solid);
+            color: var(--text-primary);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: var(--transition);
+            box-shadow: var(--shadow-sm);
+            -webkit-appearance: none;
+        }
+
+        .playlist-chip:hover {
+            background: var(--accent-light);
+        }
+
+        .playlist-chip.active {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+
+        .playlist-chip.active:hover {
+            background: var(--accent);
+        }
+
+        .playlist-chip-action {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.25);
+            font-size: 12px;
+            line-height: 1;
+        }
+
+        .playlist-chip-action:hover {
+            background: rgba(255, 255, 255, 0.4);
+        }
+
+        .playlist-chip-add {
+            color: var(--text-secondary);
+            border-style: dashed;
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .playlist-chip-add:hover {
+            color: var(--accent);
+            border-color: var(--accent);
+            background: var(--accent-light);
+        }
+
         /* Playlist */
         .playlist-section {
             flex: 1;
@@ -588,6 +665,8 @@
         </header>
 
         <input type="file" id="fileInput" accept="audio/*" multiple>
+
+        <nav class="playlist-tabs" id="playlistTabs"></nav>
 
         <section class="playlist-section" id="playlistSection">
             <div class="empty-state" id="emptyState">

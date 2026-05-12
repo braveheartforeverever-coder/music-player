@@ -1,9 +1,11 @@
-const CACHE_NAME = 'music-player-v2';
+const CACHE_NAME = 'music-player-v4';
 const urlsToCache = [
-  '/',
-  '/index.html',
-  '/app.js',
-  '/manifest.json'
+  './',
+  './index.html',
+  './app.js',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png'
 ];
 
 self.addEventListener('install', event => {

@@ -9,6 +9,10 @@ class MusicPlayer {
         this.db = null;
         this.isDragging = false;
 
+        this.playlists = [];
+        this.currentPlaylistId = 1;
+        this.DEFAULT_PLAYLIST_ID = 1;
+
         this.audioPlayer = document.getElementById('audioPlayer');
         this.fileInput = document.getElementById('fileInput');
         this.playlistSection = document.getElementById('playlistSection');
@@ -27,8 +31,9 @@ class MusicPlayer {
         this.addBtn = document.getElementById('addBtn');
         this.clearBtn = document.getElementById('clearBtn');
         this.toast = document.getElementById('toast');
+        this.playlistTabs = document.getElementById('playlistTabs');
 
-        this.init();
+        this.init().catch((error) => this.handleInitError(error));
     }
 
     async init() {
@@ -52,27 +57,81 @@ class MusicPlayer {
             this.isPlaying = true;
             this.updatePlayPauseIcon();
             this.updateActiveTrackState();
+            this.updateMediaSessionPlaybackState();
         });
         this.audioPlayer.addEventListener('pause', () => {
             this.isPlaying = false;
             this.updatePlayPauseIcon();
             this.updateActiveTrackState();
+            this.updateMediaSessionPlaybackState();
         });
 
+        this.setupMediaSession();
+
+        await this.loadPlaylistsFromDB();
         await this.loadPlaylistFromDB();
+        this.renderPlaylistTabs();
     }
 
     async initDB() {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open('MusicPlayerDB', 1);
+            const request = indexedDB.open('MusicPlayerDB', 2);
             request.onerror = () => reject(request.error);
             request.onsuccess = () => { this.db = request.result; resolve(); };
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
+                const tx = event.target.transaction;
+
                 if (!db.objectStoreNames.contains('tracks')) {
                     db.createObjectStore('tracks', { keyPath: 'id', autoIncrement: true });
                 }
+
+                if (!db.objectStoreNames.contains('playlists')) {
+                    db.createObjectStore('playlists', { keyPath: 'id', autoIncrement: true });
+                }
+
+                // Seed the default playlist (id = 1) and backfill playlistId on
+                // any tracks that pre-date the v2 schema.
+                const playlistStore = tx.objectStore('playlists');
+                playlistStore.get(this.DEFAULT_PLAYLIST_ID).onsuccess = (e) => {
+                    if (!e.target.result) {
+                        playlistStore.put({
+                            id: this.DEFAULT_PLAYLIST_ID,
+                            name: '默认歌单',
+                            createdAt: Date.now(),
+                        });
+                    }
+                };
+
+                const trackStore = tx.objectStore('tracks');
+                trackStore.openCursor().onsuccess = (e) => {
+                    const cursor = e.target.result;
+                    if (!cursor) return;
+                    if (cursor.value.playlistId == null) {
+                        cursor.update({ ...cursor.value, playlistId: this.DEFAULT_PLAYLIST_ID });
+                    }
+                    cursor.continue();
+                };
             };
+        });
+    }
+
+    async loadPlaylistsFromDB() {
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction(['playlists'], 'readonly');
+            const request = tx.objectStore('playlists').getAll();
+            request.onsuccess = () => {
+                this.playlists = request.result.sort((a, b) => {
+                    if (a.id === this.DEFAULT_PLAYLIST_ID) return -1;
+                    if (b.id === this.DEFAULT_PLAYLIST_ID) return 1;
+                    return a.createdAt - b.createdAt;
+                });
+                if (!this.playlists.find(p => p.id === this.currentPlaylistId)) {
+                    this.currentPlaylistId = this.DEFAULT_PLAYLIST_ID;
+                }
+                resolve();
+            };
+            request.onerror = () => reject(request.error);
         });
     }
 
@@ -106,7 +165,12 @@ class MusicPlayer {
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction(['tracks'], 'readwrite');
             const store = tx.objectStore('tracks');
-            const request = store.add({ name: file.name, blob: file, addedAt: Date.now() });
+            const request = store.add({
+                name: file.name,
+                blob: file,
+                addedAt: Date.now(),
+                playlistId: this.currentPlaylistId,
+            });
             request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
         });
@@ -119,15 +183,51 @@ class MusicPlayer {
             const request = store.getAll();
 
             request.onsuccess = () => {
-                const tracks = request.result;
+                const previousPlaylist = this.playlist;
+                const previousTrack = this.currentIndex >= 0 ? this.playlist[this.currentIndex] : null;
+                const previousTrackId = previousTrack ? previousTrack.id : null;
+                const previousTime = this.audioPlayer.currentTime;
+                const wasPlaying = this.isPlaying;
+                const tracks = request.result
+                    .filter(t => (t.playlistId ?? this.DEFAULT_PLAYLIST_ID) === this.currentPlaylistId)
+                    .sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
+
                 this.playlist = tracks.map(t => ({
                     id: t.id,
                     name: t.name,
                     url: URL.createObjectURL(t.blob),
-                    blob: t.blob
+                    blob: t.blob,
+                    playlistId: t.playlistId ?? this.DEFAULT_PLAYLIST_ID,
                 }));
+
+                if (previousTrackId !== null) {
+                    const restoredIndex = this.playlist.findIndex(t => t.id === previousTrackId);
+                    if (restoredIndex !== -1) {
+                        this.loadTrack(restoredIndex);
+                        if (Number.isFinite(previousTime) && previousTime > 0) {
+                            this.audioPlayer.currentTime = previousTime;
+                        }
+                        if (wasPlaying) this.play();
+                    } else {
+                        this.currentIndex = -1;
+                        this.audioPlayer.src = '';
+                        this.npTitle.textContent = '未在播放';
+                        this.npSubtitle.textContent = '选择一首歌曲';
+                        this.isPlaying = false;
+                        this.updatePlayPauseIcon();
+                    }
+                }
+
+                previousPlaylist.forEach((track) => {
+                    URL.revokeObjectURL(track.url);
+                });
+
                 this.renderPlaylist();
-                if (this.playlist.length > 0) this.enableControls();
+                if (this.playlist.length > 0) {
+                    this.enableControls();
+                } else {
+                    this.disableControls();
+                }
                 resolve();
             };
             request.onerror = () => reject(request.error);
@@ -175,11 +275,14 @@ class MusicPlayer {
     }
 
     async clearAllTracks() {
-        if (!confirm('确定要清空所有音乐吗？')) return;
+        const playlistName = this.getCurrentPlaylistName();
+        if (!confirm(`确定要清空"${playlistName}"里的所有音乐吗？`)) return;
 
+        const idsToDelete = this.playlist.map(t => t.id);
         return new Promise((resolve) => {
             const tx = this.db.transaction(['tracks'], 'readwrite');
-            tx.objectStore('tracks').clear();
+            const store = tx.objectStore('tracks');
+            idsToDelete.forEach(id => store.delete(id));
             tx.oncomplete = () => {
                 this.playlist.forEach(t => URL.revokeObjectURL(t.url));
                 this.playlist = [];
@@ -191,10 +294,151 @@ class MusicPlayer {
                 this.updatePlayPauseIcon();
                 this.renderPlaylist();
                 this.disableControls();
-                this.showToast('已清空播放列表');
+                this.showToast('已清空当前歌单');
                 resolve();
             };
         });
+    }
+
+    // --- Playlists (groups of tracks) ---
+
+    getCurrentPlaylistName() {
+        const p = this.playlists.find(p => p.id === this.currentPlaylistId);
+        return p ? p.name : '默认歌单';
+    }
+
+    async createPlaylist() {
+        const name = prompt('新建歌单，给它起个名字：', '');
+        if (!name) return;
+        const trimmed = name.trim();
+        if (!trimmed) return;
+        if (this.playlists.some(p => p.name === trimmed)) {
+            this.showToast('已有同名歌单');
+            return;
+        }
+
+        await new Promise((resolve, reject) => {
+            const tx = this.db.transaction(['playlists'], 'readwrite');
+            const req = tx.objectStore('playlists').add({ name: trimmed, createdAt: Date.now() });
+            req.onsuccess = () => { this.currentPlaylistId = req.result; resolve(); };
+            req.onerror = () => reject(req.error);
+        });
+
+        await this.loadPlaylistsFromDB();
+        await this.loadPlaylistFromDB();
+        this.renderPlaylistTabs();
+        this.showToast(`已创建"${trimmed}"`);
+    }
+
+    async switchPlaylist(id) {
+        if (id === this.currentPlaylistId) return;
+        this.currentPlaylistId = id;
+        await this.loadPlaylistFromDB();
+        this.renderPlaylistTabs();
+    }
+
+    async deletePlaylist(id) {
+        if (id === this.DEFAULT_PLAYLIST_ID) return;
+        const target = this.playlists.find(p => p.id === id);
+        if (!target) return;
+        if (!confirm(`删除歌单"${target.name}"？里面的歌曲也会一并删除。`)) return;
+
+        // Gather track IDs in this playlist (across all tracks, not just visible).
+        const trackIds = await new Promise((resolve, reject) => {
+            const tx = this.db.transaction(['tracks'], 'readonly');
+            const req = tx.objectStore('tracks').getAll();
+            req.onsuccess = () => resolve(
+                req.result
+                    .filter(t => (t.playlistId ?? this.DEFAULT_PLAYLIST_ID) === id)
+                    .map(t => t.id)
+            );
+            req.onerror = () => reject(req.error);
+        });
+
+        await new Promise((resolve, reject) => {
+            const tx = this.db.transaction(['tracks', 'playlists'], 'readwrite');
+            const trackStore = tx.objectStore('tracks');
+            trackIds.forEach(tid => trackStore.delete(tid));
+            tx.objectStore('playlists').delete(id);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+
+        if (this.currentPlaylistId === id) this.currentPlaylistId = this.DEFAULT_PLAYLIST_ID;
+        await this.loadPlaylistsFromDB();
+        await this.loadPlaylistFromDB();
+        this.renderPlaylistTabs();
+        this.showToast('已删除歌单');
+    }
+
+    async renamePlaylist(id) {
+        if (id === this.DEFAULT_PLAYLIST_ID) return;
+        const target = this.playlists.find(p => p.id === id);
+        if (!target) return;
+        const next = prompt('重命名歌单：', target.name);
+        if (!next) return;
+        const trimmed = next.trim();
+        if (!trimmed || trimmed === target.name) return;
+        if (this.playlists.some(p => p.name === trimmed && p.id !== id)) {
+            this.showToast('已有同名歌单');
+            return;
+        }
+
+        await new Promise((resolve, reject) => {
+            const tx = this.db.transaction(['playlists'], 'readwrite');
+            const req = tx.objectStore('playlists').put({ ...target, name: trimmed });
+            req.onsuccess = () => resolve();
+            req.onerror = () => reject(req.error);
+        });
+
+        await this.loadPlaylistsFromDB();
+        this.renderPlaylistTabs();
+    }
+
+    renderPlaylistTabs() {
+        if (!this.playlistTabs) return;
+        const fragment = document.createDocumentFragment();
+
+        this.playlists.forEach(p => {
+            const chip = document.createElement('button');
+            chip.className = 'playlist-chip';
+            if (p.id === this.currentPlaylistId) chip.classList.add('active');
+            chip.dataset.id = String(p.id);
+
+            const label = document.createElement('span');
+            label.className = 'playlist-chip-label';
+            label.textContent = p.name;
+            chip.appendChild(label);
+
+            chip.onclick = () => this.switchPlaylist(p.id);
+
+            if (p.id !== this.DEFAULT_PLAYLIST_ID && p.id === this.currentPlaylistId) {
+                const renameBtn = document.createElement('span');
+                renameBtn.className = 'playlist-chip-action';
+                renameBtn.textContent = '✎';
+                renameBtn.title = '重命名';
+                renameBtn.onclick = (e) => { e.stopPropagation(); this.renamePlaylist(p.id); };
+                chip.appendChild(renameBtn);
+
+                const delBtn = document.createElement('span');
+                delBtn.className = 'playlist-chip-action';
+                delBtn.textContent = '×';
+                delBtn.title = '删除歌单';
+                delBtn.onclick = (e) => { e.stopPropagation(); this.deletePlaylist(p.id); };
+                chip.appendChild(delBtn);
+            }
+
+            fragment.appendChild(chip);
+        });
+
+        const addChip = document.createElement('button');
+        addChip.className = 'playlist-chip playlist-chip-add';
+        addChip.textContent = '+ 新建歌单';
+        addChip.onclick = () => this.createPlaylist();
+        fragment.appendChild(addChip);
+
+        this.playlistTabs.innerHTML = '';
+        this.playlistTabs.appendChild(fragment);
     }
 
     // --- Rendering ---
@@ -221,6 +465,7 @@ class MusicPlayer {
             item.onclick = () => { this.loadTrack(index); this.play(); };
 
             const displayName = this.cleanTrackName(track.name);
+            const safeDisplayName = this.escapeHtml(displayName);
 
             item.innerHTML = `
                 <span class="track-index">${index + 1}</span>
@@ -233,7 +478,7 @@ class MusicPlayer {
                     </div>
                 </div>
                 <div class="track-info">
-                    <div class="track-name">${displayName}</div>
+                    <div class="track-name">${safeDisplayName}</div>
                     <div class="track-meta">音乐</div>
                 </div>
                 <button class="track-delete" onclick="player.deleteTrack(${track.id}, event)" title="删除">
@@ -263,6 +508,15 @@ class MusicPlayer {
         return name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
     }
 
+    escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     updateActiveTrackState() {
         const items = this.playlistSection.querySelectorAll('.track-item');
         items.forEach((item, i) => {
@@ -278,12 +532,15 @@ class MusicPlayer {
         this.currentIndex = index;
         const track = this.playlist[index];
         this.audioPlayer.src = track.url;
+        // Re-assert loop flag after src change — some WebView builds reset it.
+        this.audioPlayer.loop = (this.playMode === 'repeat-one');
 
         const displayName = this.cleanTrackName(track.name);
         this.npTitle.textContent = displayName;
         this.npSubtitle.textContent = `${index + 1} / ${this.playlist.length}`;
 
         this.updateActiveTrackState();
+        this.updateMediaSessionMetadata(track);
     }
 
     togglePlayPause() {
@@ -294,7 +551,10 @@ class MusicPlayer {
     play() {
         if (this.playlist.length === 0) return;
         if (this.currentIndex === -1) this.loadTrack(0);
-        this.audioPlayer.play();
+        const promise = this.audioPlayer.play();
+        if (promise && typeof promise.catch === 'function') {
+            promise.catch(() => {});
+        }
     }
 
     pause() {
@@ -325,7 +585,7 @@ class MusicPlayer {
         this.play();
     }
 
-    playNext() {
+    playNext(autoAdvance = false) {
         if (this.playlist.length === 0) return;
 
         if (this.playMode === 'shuffle') {
@@ -340,7 +600,8 @@ class MusicPlayer {
             } else {
                 newIndex = 0;
                 this.loadTrack(newIndex);
-                return; // stop, don't auto-play in sequential mode at end
+                if (!autoAdvance) this.play();
+                return; // sequential auto-advance stops at end
             }
         }
         this.loadTrack(newIndex);
@@ -373,7 +634,7 @@ class MusicPlayer {
                 this.play();
                 break;
             case 'repeat-all':
-                this.playNext();
+                this.playNext(true);
                 break;
             case 'shuffle':
                 this.playShuffled();
@@ -381,7 +642,7 @@ class MusicPlayer {
             case 'sequential':
             default:
                 if (this.currentIndex < this.playlist.length - 1) {
-                    this.playNext();
+                    this.playNext(true);
                 }
                 // else stop at end
                 break;
@@ -432,6 +693,11 @@ class MusicPlayer {
     }
 
     updateRepeatIcon() {
+        // Native HTML5 loop drives single-song repeat at the MediaPlayer layer,
+        // which is the only reliable path inside Android WebView/TWA — the `ended`
+        // event is flaky there and an explicit `play()` after it gets dropped.
+        this.audioPlayer.loop = (this.playMode === 'repeat-one');
+
         const svg = this.repeatBtn.querySelector('svg');
         if (this.playMode === 'repeat-one') {
             svg.innerHTML = `
@@ -447,6 +713,37 @@ class MusicPlayer {
                 <style>svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}</style>
             `;
         }
+    }
+
+    // --- MediaSession (Android lock screen / notification controls) ---
+
+    setupMediaSession() {
+        if (!('mediaSession' in navigator)) return;
+        const ms = navigator.mediaSession;
+        ms.setActionHandler('play', () => this.play());
+        ms.setActionHandler('pause', () => this.pause());
+        ms.setActionHandler('previoustrack', () => this.playPrevious());
+        ms.setActionHandler('nexttrack', () => this.playNext());
+        ms.setActionHandler('seekto', (e) => {
+            if (e.fastSeek && 'fastSeek' in this.audioPlayer) {
+                this.audioPlayer.fastSeek(e.seekTime);
+            } else {
+                this.audioPlayer.currentTime = e.seekTime;
+            }
+        });
+    }
+
+    updateMediaSessionMetadata(track) {
+        if (!('mediaSession' in navigator)) return;
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: this.cleanTrackName(track.name),
+            artist: '本地音乐',
+        });
+    }
+
+    updateMediaSessionPlaybackState() {
+        if (!('mediaSession' in navigator)) return;
+        navigator.mediaSession.playbackState = this.isPlaying ? 'playing' : 'paused';
     }
 
     // --- Progress & time ---
@@ -540,6 +837,12 @@ class MusicPlayer {
         this.toast.classList.add('show');
         clearTimeout(this._toastTimer);
         this._toastTimer = setTimeout(() => this.toast.classList.remove('show'), 1800);
+    }
+
+    handleInitError(error) {
+        console.error('MusicPlayer init failed:', error);
+        this.disableControls();
+        this.showToast('初始化失败，请刷新重试');
     }
 }
 
